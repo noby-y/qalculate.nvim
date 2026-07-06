@@ -1,7 +1,7 @@
 local M = {}
 
--- one in-flight job per bufnr per purpose; `run` (buffer evaluation) and `send`
--- (one-off batches: QalcSave/QalcDelete, doc lookups) never cancel each other
+-- one in-flight job per bufnr: `run` - buffer evaluation; `send` - one-off commands, doc lookups
+-- never cancel each other
 local run_jobs = {}
 local send_jobs = {}
 
@@ -59,45 +59,38 @@ local function start(lines, config, on_exit)
 	return jobid
 end
 
--- spawns `qalc -f -` over the whole buffer, killing any prior evaluation job for `bufnr`
--- `on_done(namespace, bufnr, stdout_lines)` fires only for the current job
-function M.run(namespace, bufnr, input, config, on_done)
-	if run_jobs[bufnr] then
-		vim.fn.jobstop(run_jobs[bufnr])
+-- starts a job in `jobs[bufnr]`, killing any prior job in that same slot
+-- `callback(stdout_lines)` fires only for the current job
+local function dispatch(jobs, bufnr, input, config, callback)
+	if jobs[bufnr] then
+		vim.fn.jobstop(jobs[bufnr])
 	end
 
 	local jobid
 	jobid = start(input, config, function(stdout_lines)
-		if run_jobs[bufnr] ~= jobid then
+		if jobs[bufnr] ~= jobid then
 			return
 		end
-		run_jobs[bufnr] = nil
-		on_done(namespace, bufnr, stdout_lines)
-	end)
-
-	run_jobs[bufnr] = jobid
-end
-
--- one-off command for anything that doesn't need full buffer eval 
--- completion doc lookups + :QalcSave/:QalcDelete 
--- independent of `run`'s job slot, but a second `send` for the same bufnr supersedes first
-function M.send(bufnr, cmds, config, callback)
-	if send_jobs[bufnr] then
-		vim.fn.jobstop(send_jobs[bufnr])
-	end
-
-	local jobid
-	jobid = start(cmds, config, function(stdout_lines)
-		if send_jobs[bufnr] ~= jobid then
-			return
-		end
-		send_jobs[bufnr] = nil
+		jobs[bufnr] = nil
 		callback(stdout_lines)
 	end)
 
-	send_jobs[bufnr] = jobid
+	jobs[bufnr] = jobid
 end
 
+-- spawns `qalc -f -` over the whole buffer, killing any prior evaluation job for `bufnr`
+function M.run(bufnr, input, config, on_done)
+	dispatch(run_jobs, bufnr, input, config, on_done)
+end
+
+-- one-off command for anything that doesn't need full buffer eval
+-- completion doc lookups + :QalcSave/:QalcDelete
+-- independent of `run`'s job slot, but a second `send` for the same bufnr supersedes first
+function M.send(bufnr, cmds, config, callback)
+	dispatch(send_jobs, bufnr, cmds, config, callback)
+end
+
+-- stop all jobs
 function M.stop(bufnr)
 	if run_jobs[bufnr] then
 		vim.fn.jobstop(run_jobs[bufnr])
