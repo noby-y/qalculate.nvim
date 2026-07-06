@@ -1,14 +1,11 @@
--- setup, config, attach/detach lifecycle, public API, yank
-
 local process = require('qalc.process')
 local display = require('qalc.display')
-local parse = require('qalc.parse')
+local parser = require('qalc.parse')
 
 local M = {}
 
--- our namespace: scopes extmarks and diagnostics so we never touch other plugins'
+-- scopes extmarks and diagnostics so we never touch other plugins'
 local namespace = vim.api.nvim_create_namespace('qalc')
-M.namespace = namespace
 
 M.config = {
 	cmd_args = {}, -- extra `-set "..."` options, e.g. { 'angle deg' }
@@ -24,7 +21,7 @@ M.config = {
 local default_diagnostics_config = {
 	virtual_text = true,
 	underline = false,
-	signs = false,
+	signs = true,
 	severity_sort = true,
 }
 
@@ -32,7 +29,6 @@ local function apply_diagnostics_config()
 	vim.diagnostic.config(M.config.diagnostics_config or default_diagnostics_config, namespace)
 end
 
--- applied immediately so the plugin behaves sanely even if setup() is never called
 apply_diagnostics_config()
 
 function M.setup(new_config)
@@ -40,29 +36,26 @@ function M.setup(new_config)
 	apply_diagnostics_config()
 end
 
--- bufnr -> true while attached; consulted by is_attached() and to make attach()
--- idempotent
+-- bufnr -> true while attached. used by is_attached()
 local attached = {}
--- bufnr -> true once detach() has been requested; the on_lines callback checks
--- this itself and returns true (Neovim's own "please detach me" signal) instead of
--- running again, since nvim_buf_attach has no other way to cancel a callback
+-- bufnr -> true once detach() has been requested. the on_lines callback checks
+-- this itself and returns true instead of running again, since nvim_buf_attach has no other way to cancel a callback
 local should_detach = {}
 
 local function run(bufnr)
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local input, hints = parse.parse_input(lines)
+	local input, hints = parser.parse_input(lines)
 
-	-- the completion module's per-buffer tier (§7.2) rides along in the same
-	-- invocation as a trailing `list` command -- not a separate process
+	-- the completion module's per-buffer invocation as a trailing `list` command
 	local send_input = vim.list_extend({}, input)
 	table.insert(send_input, 'list')
 
-	process.run(namespace, bufnr, send_input, M.config, function(_, _, raw_lines)
+	process.run(bufnr, send_input, M.config, function(raw_lines)
 		if should_detach[bufnr] then
 			return
 		end
 
-		local parsed = parse.parse_results(input, raw_lines, hints)
+		local parsed = parser.parse_results(input, raw_lines, hints)
 		display.update.all(namespace, bufnr, M.config, parsed)
 
 		local complete = require('qalc.complete')
