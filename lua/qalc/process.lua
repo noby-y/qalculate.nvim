@@ -1,6 +1,3 @@
--- spawns/kills the one-shot `qalc -f -` job used for every invocation (buffer
--- evaluation and one-off batches alike)
-
 local M = {}
 
 -- one in-flight job per bufnr per purpose; `run` (buffer evaluation) and `send`
@@ -8,19 +5,10 @@ local M = {}
 local run_jobs = {}
 local send_jobs = {}
 
--- forced *after* the user's own cmd_args so they always win, same rationale as
--- `vertical space on`. Confirmed empirically: qalculate's own default config has
--- `save definitions on exit = yes` -- without forcing it off here, every
--- throwaway temporary variable/function typed into a scratch buffer would get
--- silently written to the user's permanent
--- ~/.local/share/qalculate/definitions/*.xml the moment this one-shot process
--- exits, on *any* system where the user hasn't already disabled that qalculate
--- default themselves. `save mode`/`save config` are forced off too as
--- belt-and-suspenders (not proven to leak in batch mode, but free to disable).
--- The explicit `keep <name>` + `save definitions` that :QalcSave sends (§8) is a
--- separate, direct command and still works normally with all three off.
 local forced_args = {
-	'vertical space on',
+	-- WARN: THIS IS NECESSARY FOR PARSING, PLUGIN BREAKS WITHOUT IT
+	'vspace',
+	-- avoid saving defs without explicit command
 	'save definitions no',
 	'save mode no',
 	'save config no',
@@ -40,9 +28,7 @@ local function build_cmd(config)
 end
 
 -- starts `qalc -f -`, feeds it `lines` over stdin, and calls `on_exit(stdout_lines)`
--- once the process exits. `stdout_lines` is the flat array of raw output lines with
--- the trailing empty element (artifact of jobstart's line-splitting of a
--- newline-terminated stream) already stripped.
+-- `stdout_lines` is the flat array of raw output lines (trailing element stripped)
 local function start(lines, config, on_exit)
 	local stdout_lines = {}
 
@@ -73,10 +59,8 @@ local function start(lines, config, on_exit)
 	return jobid
 end
 
--- spawns `qalc -f -` over the whole buffer, killing any prior evaluation job for
--- `bufnr`. `on_done(namespace, bufnr, stdout_lines)` fires only for the job that is
--- current at the time it exits -- a killed job's callback never fires, so a slow,
--- already-superseded run can't clobber a fresher one that finished first.
+-- spawns `qalc -f -` over the whole buffer, killing any prior evaluation job for `bufnr`
+-- `on_done(namespace, bufnr, stdout_lines)` fires only for the current job
 function M.run(namespace, bufnr, input, config, on_done)
 	if run_jobs[bufnr] then
 		vim.fn.jobstop(run_jobs[bufnr])
@@ -94,10 +78,9 @@ function M.run(namespace, bufnr, input, config, on_done)
 	run_jobs[bufnr] = jobid
 end
 
--- one-off batch for anything that isn't "evaluate the whole buffer": completion doc
--- lookups and :QalcSave/:QalcDelete. Independent of `run`'s job slot, but a second
--- `send` for the same bufnr still supersedes the first (same killed-job-never-fires
--- guarantee as `run`).
+-- one-off command for anything that doesn't need full buffer eval 
+-- completion doc lookups + :QalcSave/:QalcDelete 
+-- independent of `run`'s job slot, but a second `send` for the same bufnr supersedes first
 function M.send(bufnr, cmds, config, callback)
 	if send_jobs[bufnr] then
 		vim.fn.jobstop(send_jobs[bufnr])
